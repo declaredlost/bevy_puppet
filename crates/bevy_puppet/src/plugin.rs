@@ -26,6 +26,14 @@ impl Plugin for PuppetPlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<Rig>()
             .init_asset::<Clip>()
+            .register_type::<crate::Puppet>()
+            .register_type::<crate::Skeleton>()
+            .register_type::<crate::Bone>()
+            .register_type::<crate::Bones>()
+            .register_type::<crate::pose::Pose>()
+            .register_type::<crate::pose::Placement>()
+            .register_type::<crate::pose::Side>()
+            .register_type::<crate::pose::Gait>()
             .init_resource::<Layers>()
             .configure_sets(
                 PostUpdate,
@@ -33,12 +41,7 @@ impl Plugin for PuppetPlugin {
             )
             .add_systems(
                 PostUpdate,
-                (
-                    skeleton::build,
-                    skeleton::forget,
-                    skeleton::animate,
-                    skeleton::place,
-                )
+                (skeleton::build, skeleton::animate, skeleton::place)
                     .chain()
                     .in_set(PuppetSystems),
             );

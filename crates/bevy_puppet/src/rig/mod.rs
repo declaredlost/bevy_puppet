@@ -29,6 +29,9 @@ use crate::pose::{Placement, Pose};
 /// by handle.
 #[derive(Asset, TypePath, Debug, Clone)]
 pub struct Rig {
+    /// Which rig this is, as made: a rig replaced (a hot reload) has a new one,
+    /// so what was built from the old one is built again.
+    pub(crate) revision: u64,
     pub(crate) bones: Vec<Segment>,
     names: HashMap<String, usize>,
     roles: HashMap<InternedRole, usize>,
@@ -159,6 +162,7 @@ impl Rig {
             .map(|(role, bone)| Ok((role.intern(), find(bone, &format!("{role:?}"))?)))
             .collect::<Result<_, RigError>>()?;
         let mut rig = Self {
+            revision: crate::revision(),
             bones,
             names,
             roles,
@@ -427,6 +431,38 @@ mod tests {
         let placed = rig.place(&pose);
         assert!((placed[rig.index("arm").unwrap()].angle - FRAC_PI_2).abs() < 1e-5);
         assert!(placed[rig.index("hand").unwrap()].angle.abs() < 1e-5);
+    }
+
+    #[test]
+    fn reaches_from_under_a_bone_that_turns_in_steps() {
+        use crate::pose::Goal;
+        use crate::testing::{Mark, Stage};
+        // A torso that turns in 16 steps, leaned between two; the off hand
+        // reaching for a point on the other hand.
+        let stage = Stage::new(
+            rig(r#"(
+                bones: {
+                    "torso": (at: (0, 20), turns: 16, rest: 10),
+                    "arm": (parent: "torso", at: (2, 6)),
+                    "forearm": (parent: "arm", at: (0, -6)),
+                    "hand": (parent: "forearm", at: (0, -6)),
+                    "off_arm": (parent: "torso", at: (-2, 6)),
+                    "off_forearm": (parent: "off_arm", at: (0, -6)),
+                    "off_hand": (parent: "off_forearm", at: (0, -6)),
+                },
+                constraints: [Reach(hand: "off_hand", on: "hand", goal: Hold, after: React)],
+            )"#)
+            .unwrap(),
+        );
+        let at = Vec2::new(0.0, 4.0);
+        let mut goals = crate::pose::Goals::default();
+        goals.set(Mark::Hold, Some(Goal::Point(at)));
+        let pose = stage.aimed(&goals);
+        let joints = stage.rig.joints(&pose);
+        let (grip, angle) = joints[stage.index("hand")];
+        let target = grip + Vec2::from_angle(angle).rotate(at);
+        let (off, _) = joints[stage.index("off_hand")];
+        assert!(off.distance(target) < 0.01, "{off} vs {target}");
     }
 
     #[test]

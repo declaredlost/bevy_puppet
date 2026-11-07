@@ -15,7 +15,7 @@ mod pixels;
 use std::f32::consts::TAU;
 
 use bevy::image::{Image, TextureAtlasLayout};
-use bevy::math::{URect, UVec2, Vec2};
+use bevy::math::{BVec2, URect, UVec2, Vec2};
 
 use self::pixels::Pixels;
 
@@ -32,12 +32,15 @@ impl RotSprite {
     /// How much larger the sprite is sampled from: Scale2x three times.
     const SCALE: u32 = 8;
 
-    /// The sprite in `rect` of `image`, to turn about `pivot`: in pixels from
-    /// the rect's top left, down positive. `None` if `image` can't be read
-    /// there.
+    /// The sprite in `rect` of `image`, mirrored as `flip` says, to turn about
+    /// `pivot`: in pixels from the rect's top left, down positive. `None` if
+    /// `image` can't be read there.
     #[must_use]
-    pub(crate) fn new(image: &Image, rect: URect, pivot: Vec2) -> Option<Self> {
-        Some(Self::from_pixels(&Pixels::read(image, rect)?, pivot))
+    pub(crate) fn new(image: &Image, rect: URect, pivot: Vec2, flip: BVec2) -> Option<Self> {
+        Some(Self::from_pixels(
+            &Pixels::read(image, rect)?.flipped(flip),
+            pivot,
+        ))
     }
 
     fn from_pixels(sprite: &Pixels, pivot: Vec2) -> Self {
@@ -51,7 +54,9 @@ impl RotSprite {
         // Each side as odd or even as twice the pivot's place along it, so
         // the frame's middle falls where the pivot does: on a pixel's edge,
         // or in its middle.
-        let parity = |twice: f32| span + (span + twice.round() as u32) % 2;
+        let parity = |twice: f32| {
+            span + u32::from((i64::from(span) + twice.round() as i64).rem_euclid(2) == 1)
+        };
         let frame = UVec2::new(parity(2.0 * pivot.x), parity(2.0 * pivot.y));
         Self {
             large,
@@ -61,7 +66,6 @@ impl RotSprite {
     }
 
     /// One step's size: square about the pivot, but for its parity.
-    #[cfg(test)]
     #[must_use]
     pub(crate) fn frame(&self) -> UVec2 {
         self.frame
@@ -170,6 +174,14 @@ mod tests {
     }
 
     #[test]
+    fn a_pivot_off_the_sprite_keeps_its_parity() {
+        // A joint 1.5 left of the sprite: twice that, odd, so an odd frame
+        // with its middle in a pixel's middle.
+        let rotsprite = RotSprite::from_pixels(&line(), Vec2::new(-1.5, 4.5));
+        assert_eq!(rotsprite.frame().x % 2, 1);
+    }
+
+    #[test]
     fn keeps_the_sprites_own_colours() {
         let strip = RotSprite::from_pixels(&line(), middle()).pixels(7);
         assert!(strip.data.iter().all(|p| *p == RED || p[3] == 0));
@@ -184,7 +196,7 @@ mod tests {
     fn reads_and_writes_images() {
         let image = line().image();
         let rect = URect::new(0, 0, 9, 9);
-        let rotsprite = RotSprite::new(&image, rect, middle()).unwrap();
+        let rotsprite = RotSprite::new(&image, rect, middle(), BVec2::FALSE).unwrap();
         let strip = rotsprite.strip(4);
         assert_eq!(strip.width(), 52);
         assert_eq!(rotsprite.atlas(4).textures.len(), 4);

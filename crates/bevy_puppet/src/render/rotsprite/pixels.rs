@@ -9,7 +9,7 @@
 use bevy::asset::RenderAssetUsages;
 use bevy::color::ColorToPacked;
 use bevy::image::{Image, ImageSampler};
-use bevy::math::URect;
+use bevy::math::{BVec2, URect};
 use wgpu_types::{Extent3d, TextureDimension, TextureFormat};
 
 /// Pixels in rows, top first, each sRGB with alpha.
@@ -49,6 +49,22 @@ impl Pixels {
 
     pub(crate) fn set(&mut self, x: u32, y: u32, pixel: [u8; 4]) {
         self.data[(y * self.width + x) as usize] = pixel;
+    }
+
+    /// Mirrored across, along `flip.x`, and up and down, along `flip.y`.
+    pub(crate) fn flipped(mut self, flip: BVec2) -> Self {
+        if flip.x {
+            for row in self.data.chunks_mut(self.width as usize) {
+                row.reverse();
+            }
+        }
+        if flip.y {
+            let width = self.width as usize;
+            let rows: Vec<Vec<[u8; 4]>> =
+                self.data.chunks(width).rev().map(<[_]>::to_vec).collect();
+            self.data = rows.concat();
+        }
+        self
     }
 
     /// The pixel at `(x, y)`, or the nearest edge's off the sprite.

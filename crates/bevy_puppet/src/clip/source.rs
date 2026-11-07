@@ -164,11 +164,11 @@ impl Curve {
         1.0
     }
 
-    /// Whether its keyframes are in order of `t`.
+    /// Whether its keyframes are in order of `t`, none at the same `t`.
     #[must_use]
     pub fn is_ordered(&self) -> bool {
         match self {
-            Self::Keys(keys) => keys.windows(2).all(|pair| pair[0].0 <= pair[1].0),
+            Self::Keys(keys) => keys.windows(2).all(|pair| pair[0].0 < pair[1].0),
             Self::Wave { .. } => true,
         }
     }

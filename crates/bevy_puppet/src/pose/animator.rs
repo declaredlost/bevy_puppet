@@ -24,25 +24,27 @@ pub struct Layers(Vec<InternedLayer>);
 /// What plays on a puppet: clips, by handle, posed every frame.
 ///
 /// Each since it started. The game plays and stops them; each frame it poses
-/// the puppet from them.
+/// the puppet from them. A clip played before it has loaded plays from when it
+/// was played, once it has.
 #[derive(Component, Debug, Default, Clone)]
 pub struct Animator {
     clock: f32,
-    /// How many clips it's been told to play, all told: each playing's turn, so
-    /// a layer stopped before a clip's played doesn't stop it.
+    /// How many clips it's been told to play, all told: each playing's turn.
     plays: u64,
     playing: Vec<Playing>,
-    /// Layers stopped, each with the plays before it was: what's still to be
-    /// taken off once its clips' layers are known.
+    /// Layers stopped while some clip played before was still loading, each
+    /// with the plays before it was: kept until those clips' layers are known,
+    /// and those on it taken off.
     stopped: Vec<(InternedLayer, u64)>,
     settle: Option<Settle>,
     last: Option<Pose>,
-    /// The pose a held clip plays over, and its layer: what's under it stays as
-    /// it was.
-    frozen: Option<(Pose, InternedLayer)>,
-    /// Clips bound to the rig they were last posed on.
-    bound: HashMap<AssetId<Clip>, Option<Binding>>,
-    rig: Option<AssetId<Rig>>,
+    /// The pose a held clip plays over: the layers under it as they were when
+    /// it started.
+    frozen: Option<Frozen>,
+    /// Clips bound to the rig, by clip, with the revisions they were bound at.
+    bound: HashMap<AssetId<Clip>, Bound>,
+    /// The rig they were bound to, and its revision.
+    rig: Option<(AssetId<Rig>, u64)>,
 }
 
 #[derive(Debug, Clone)]
@@ -50,8 +52,24 @@ struct Playing {
     clip: Handle<Clip>,
     since: f32,
     turn: u64,
-    /// Whether its hold, if it holds, has frozen the pose yet.
+    /// Its layer, once it's loaded.
+    layer: Option<InternedLayer>,
+    /// Whether its hold, if it holds, has frozen the pose.
     froze: bool,
+}
+
+#[derive(Debug, Clone)]
+struct Frozen {
+    pose: Pose,
+    layer: InternedLayer,
+    /// The turn of the clip holding it.
+    owner: u64,
+}
+
+#[derive(Debug, Clone)]
+struct Bound {
+    revision: u64,
+    binding: Option<Binding>,
 }
 
 #[derive(Debug, Clone)]
@@ -106,6 +124,7 @@ impl Animator {
             clip: clip.clone(),
             since: self.clock - ago,
             turn: self.plays,
+            layer: None,
             froze: false,
         });
     }
@@ -115,15 +134,22 @@ impl Animator {
         self.playing.retain(|playing| playing.clip != *clip);
     }
 
-    /// Stops every clip playing on `layer`.
+    /// Stops every clip playing on `layer`, at once; a clip still loading, as
+    /// soon as its layer is known to be `layer`.
     pub fn stop_layer(&mut self, layer: impl LayerLabel) {
-        self.stopped.push((layer.intern(), self.plays));
+        let layer = layer.intern();
+        self.playing.retain(|playing| playing.layer != Some(layer));
+        if self.playing.iter().any(|playing| playing.layer.is_none()) {
+            self.stopped.push((layer, self.plays));
+        }
     }
 
-    /// Whether `clip` is playing.
+    /// Whether `clip` is playing: not if a layer stopped since may be its.
     #[must_use]
     pub fn playing(&self, clip: &Handle<Clip>) -> bool {
-        self.playing.iter().any(|playing| playing.clip == *clip)
+        self.playing
+            .iter()
+            .any(|playing| playing.clip == *clip && !self.maybe_stopped(playing))
     }
 
     /// Holds halfway from the last pose for `seconds`: a switch between clips
@@ -138,9 +164,14 @@ impl Animator {
         }
     }
 
-    /// Forgets how its clips are bound: one changed, or its rig did.
-    pub(crate) fn forget(&mut self) {
-        self.bound.clear();
+    /// Whether `playing`, still loading, was played before a layer was stopped
+    /// that may be its.
+    fn maybe_stopped(&self, playing: &Playing) -> bool {
+        playing.layer.is_none()
+            && self
+                .stopped
+                .iter()
+                .any(|&(_, before)| playing.turn <= before)
     }
 
     /// `delta` seconds on, the pose of `rig` from what plays and `inputs`:
@@ -156,61 +187,38 @@ impl Animator {
         inputs: Inputs,
         delta: f32,
     ) -> Pose {
-        if self.rig != Some(rig_id) {
+        if self.rig != Some((rig_id, rig.revision)) {
             self.bound.clear();
-            self.rig = Some(rig_id);
+            self.frozen = None;
+            self.rig = Some((rig_id, rig.revision));
         }
+        self.learn(clips);
+        // A clip that holds freezes the layers under it as they were when
+        // it was played: as of the last frame.
+        self.hold(rig, clips, layers, inputs);
         self.clock += delta;
         let clock = self.clock;
-        let stopped = std::mem::take(&mut self.stopped);
         self.playing.retain(|playing| {
-            let Some(clip) = clips.get(&playing.clip) else {
-                return true;
-            };
-            let stopped = stopped
-                .iter()
-                .any(|&(layer, before)| clip.layer == layer && playing.turn <= before);
-            !stopped && (clip.hold || !clip.finished(clock - playing.since))
+            clips
+                .get(&playing.clip)
+                .is_none_or(|clip| clip.hold || !clip.finished(clock - playing.since))
         });
-        // A clip that holds freezes the pose as it starts.
-        for playing in &mut self.playing {
-            if let Some(clip) = clips.get(&playing.clip)
-                && clip.hold
-                && !playing.froze
-            {
-                playing.froze = true;
-                let from = self.last.clone().unwrap_or_default();
-                self.frozen = Some((from, clip.layer));
-            }
-        }
-        if !self
-            .playing
-            .iter()
-            .any(|playing| clips.get(&playing.clip).is_some_and(|clip| clip.hold))
-        {
-            self.frozen = None;
-        }
         let (mut pose, floor) = match &self.frozen {
-            Some((from, layer)) if from.joints.len() == rig.len() => {
-                (from.clone(), layers.rank(*layer))
+            Some(frozen) if frozen.pose.joints.len() == rig.len() => {
+                (frozen.pose.clone(), layers.rank(frozen.layer))
             }
             _ => (Pose::rest(rig), 0),
         };
-        for &layer in layers.0.iter().skip(floor) {
-            self.layer(rig, clips, &mut pose, |clip| clip.layer == layer, inputs);
-            Self::constrain(rig, &mut pose, inputs, |after| after == layer);
-        }
-        self.layer(
-            rig,
-            clips,
-            &mut pose,
-            |clip| !layers.0.contains(&clip.layer),
-            inputs,
-        );
-        Self::constrain(rig, &mut pose, inputs, |after| !layers.0.contains(&after));
+        self.build(rig, clips, layers, inputs, &mut pose, floor..usize::MAX);
         for (bone, joint) in rig.bones.iter().zip(&mut pose.joints) {
             joint.angle = bone.limited(joint.angle);
         }
+        let playing: Vec<AssetId<Clip>> = self
+            .playing
+            .iter()
+            .map(|playing| playing.clip.id())
+            .collect();
+        self.bound.retain(|id, _| playing.contains(id));
         let pose = match &mut self.settle {
             Some(settle) => {
                 if settle.fresh {
@@ -229,6 +237,109 @@ impl Animator {
         };
         self.last = Some(pose.clone());
         pose
+    }
+
+    /// Learns the layers of clips that have loaded, taking off those a layer
+    /// stopped since they were played; and forgets stops that no clip still
+    /// loading can be under.
+    fn learn(&mut self, clips: &Assets<Clip>) {
+        let stopped = self.stopped.clone();
+        self.playing.retain_mut(|playing| {
+            if playing.layer.is_none()
+                && let Some(clip) = clips.get(&playing.clip)
+            {
+                playing.layer = Some(clip.layer);
+                if stopped
+                    .iter()
+                    .any(|&(layer, before)| layer == clip.layer && playing.turn <= before)
+                {
+                    return false;
+                }
+            }
+            true
+        });
+        let loading: Vec<u64> = self
+            .playing
+            .iter()
+            .filter(|playing| playing.layer.is_none())
+            .map(|playing| playing.turn)
+            .collect();
+        self.stopped
+            .retain(|&(_, before)| loading.iter().any(|&turn| turn <= before));
+    }
+
+    /// Freezes the pose for a clip that holds as it starts: the layers under it
+    /// as they are now. Lets it go once its clip stops; another still holding
+    /// freezes it again.
+    fn hold(&mut self, rig: &Rig, clips: &Assets<Clip>, layers: &Layers, inputs: Inputs) {
+        if let Some(frozen) = &self.frozen
+            && !self
+                .playing
+                .iter()
+                .any(|playing| playing.turn == frozen.owner)
+        {
+            self.frozen = None;
+            for playing in &mut self.playing {
+                playing.froze = false;
+            }
+        }
+        let fresh = self.playing.iter().position(|playing| {
+            !playing.froze && clips.get(&playing.clip).is_some_and(|clip| clip.hold)
+        });
+        let Some(index) = fresh else {
+            return;
+        };
+        let playing = &mut self.playing[index];
+        playing.froze = true;
+        let turn = playing.turn;
+        let Some(layer) = clips.get(&playing.clip).map(|clip| clip.layer) else {
+            return;
+        };
+        let mut below = Pose::rest(rig);
+        self.build(
+            rig,
+            clips,
+            layers,
+            inputs,
+            &mut below,
+            0..layers.rank(layer),
+        );
+        self.frozen = Some(Frozen {
+            pose: below,
+            layer,
+            owner: turn,
+        });
+    }
+
+    /// Plays the layers ranked within `ranks` onto `pose`, each followed by its
+    /// constraints; and, if `ranks` runs past them all, the clips and
+    /// constraints of layers the app doesn't name.
+    fn build(
+        &mut self,
+        rig: &Rig,
+        clips: &Assets<Clip>,
+        layers: &Layers,
+        inputs: Inputs,
+        pose: &mut Pose,
+        ranks: std::ops::Range<usize>,
+    ) {
+        for (rank, &layer) in layers.0.iter().enumerate() {
+            if !ranks.contains(&rank) {
+                continue;
+            }
+            self.layer(rig, clips, pose, |clip| clip.layer == layer, inputs);
+            Self::constrain(rig, pose, inputs, |after| after == layer);
+        }
+        if ranks.contains(&layers.0.len()) {
+            self.layer(
+                rig,
+                clips,
+                pose,
+                |clip| !layers.0.contains(&clip.layer),
+                inputs,
+            );
+            Self::constrain(rig, pose, inputs, |after| !layers.0.contains(&after));
+        }
     }
 
     /// Plays the clips `on` picks onto `pose`, in the order they started.
@@ -250,12 +361,18 @@ impl Animator {
             }
             let id = playing.clip.id();
             let t = self.parameter(clip, playing.since, inputs);
-            let binding = self.bound.entry(id).or_insert_with(|| {
-                rig.bind(clip)
+            let bind = || Bound {
+                revision: clip.revision,
+                binding: rig
+                    .bind(clip)
                     .inspect_err(|error| warn!("a clip doesn't fit its puppet's rig: {error}"))
-                    .ok()
-            });
-            if let Some(binding) = binding {
+                    .ok(),
+            };
+            let bound = self.bound.entry(id).or_insert_with(bind);
+            if bound.revision != clip.revision {
+                *bound = bind();
+            }
+            if let Some(binding) = &bound.binding {
                 Self::apply(rig, pose, clip, binding, t);
             }
         }
@@ -306,7 +423,9 @@ impl Animator {
     fn apply(rig: &Rig, pose: &mut Pose, clip: &Clip, binding: &Binding, t: f32) {
         let loops = clip.loops();
         for (channel, &index) in clip.channels.iter().zip(&binding.0) {
-            let bone = &rig.bones[index];
+            let (Some(bone), true) = (rig.bones.get(index), index < pose.joints.len()) else {
+                continue;
+            };
             let joint = &mut pose.joints[index];
             let set = |slot: &mut f32, value: f32| {
                 if channel.add {
@@ -413,6 +532,90 @@ mod tests {
         assert!(animator.playing(&stand));
         let pose = stage.pose(&mut animator, None, None, None, 0.1);
         assert!(near(pose.joints[front].angle, 0.0));
+    }
+
+    #[test]
+    fn stopping_a_layer_then_playing_one_of_its_clips_plays_it() {
+        let mut stage = body("");
+        let front = stage.index("front");
+        let walk =
+            stage.clip(r#"(layer: Move, channels: [(bone: "front", angle: Keys([(0, 30)]))])"#);
+        let mut animator = Animator::default();
+        animator.play(&walk);
+        stage.pose(&mut animator, None, None, None, 0.1);
+        animator.stop_layer(Tier::Move);
+        assert!(!animator.playing(&walk), "stopped at once");
+        animator.play(&walk);
+        let pose = stage.pose(&mut animator, None, None, None, 0.1);
+        assert!(animator.playing(&walk));
+        assert!(near(pose.joints[front].angle, 30.0));
+    }
+
+    #[test]
+    fn a_layer_stopped_while_a_clip_loads_stops_it_once_it_has() {
+        let mut stage = body("");
+        let torso = stage.index("torso");
+        let flinch = stage.loading();
+        let idle = stage.loading();
+        let mut animator = Animator::default();
+        animator.play(&flinch);
+        animator.play(&idle);
+        animator.stop_layer(Tier::React);
+        stage.pose(&mut animator, None, None, None, 0.1);
+        stage.load(
+            &flinch,
+            r#"(layer: React, channels: [(bone: "torso", angle: Keys([(0, -8)]))])"#,
+        );
+        stage.load(
+            &idle,
+            r#"(layer: Move, channels: [(bone: "torso", angle: Keys([(0, 5)]))])"#,
+        );
+        let pose = stage.pose(&mut animator, None, None, None, 0.1);
+        assert!(!animator.playing(&flinch), "its layer was stopped");
+        assert!(animator.playing(&idle), "another layer's plays on");
+        assert!(near(pose.joints[torso].angle, 5.0));
+    }
+
+    #[test]
+    fn a_clip_replaced_is_bound_again() {
+        let mut stage = body("");
+        let (torso, front) = (stage.index("torso"), stage.index("front"));
+        let lean =
+            stage.clip(r#"(layer: Move, channels: [(bone: "torso", angle: Keys([(0, 5)]))])"#);
+        let mut animator = Animator::default();
+        animator.play(&lean);
+        stage.pose(&mut animator, None, None, None, 0.1);
+        stage.load(
+            &lean,
+            r#"(layer: Move, channels: [(bone: "front", angle: Keys([(0, 7)]))])"#,
+        );
+        let pose = stage.pose(&mut animator, None, None, None, 0.1);
+        assert!(near(pose.joints[front].angle, 7.0));
+        assert!(near(pose.joints[torso].angle, 0.0));
+    }
+
+    #[test]
+    fn a_held_clip_adds_what_plays_over_it_once() {
+        let mut stage = body("");
+        let torso = stage.index("torso");
+        let breathe = stage.clip(
+            r#"(layer: Hold, channels: [(bone: "torso", add: true, angle: Keys([(0, 4)]))])"#,
+        );
+        let death = stage.clip(
+            r#"(layer: React, driver: Time(length: 0.5), hold: true, channels: [(bone: "front", angle: Keys([(0, 90)]))])"#,
+        );
+        let mut animator = Animator::default();
+        animator.play(&breathe);
+        stage.pose(&mut animator, None, None, None, 0.1);
+        animator.replay(&death);
+        for _ in 0..10 {
+            stage.pose(&mut animator, None, None, None, 0.1);
+        }
+        let dead = stage.pose(&mut animator, None, None, None, 0.1);
+        assert!(
+            near(dead.joints[torso].angle, 4.0),
+            "breathing counted once"
+        );
     }
 
     #[test]

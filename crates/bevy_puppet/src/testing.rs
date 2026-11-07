@@ -87,6 +87,16 @@ impl Stage {
         self.clips.add(clip(source))
     }
 
+    /// A clip still loading: played by handle before it's there.
+    pub(crate) fn loading(&mut self) -> Handle<Clip> {
+        self.clips.reserve_handle()
+    }
+
+    /// The clip `source` writes, loaded into `handle` (or replacing it).
+    pub(crate) fn load(&mut self, handle: &Handle<Clip>, source: &str) {
+        self.clips.insert(handle.id(), clip(source)).unwrap();
+    }
+
     /// `animator`'s pose, `delta` seconds on.
     pub(crate) fn pose(
         &self,

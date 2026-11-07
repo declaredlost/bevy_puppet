@@ -73,13 +73,14 @@ last pose a moment, at a switch.
 
 A [`Puppet`] gets a [`Skeleton`] child once its rig loads, and under it an
 entity for each [`Bone`], each `ChildOf` its parent bone: a real hierarchy,
-so inspectors show it and anything the game parents under a bone (a sprite,
-a blade, a particle emitter) moves, turns and mirrors with it. Each frame
+reflected, so inspectors show it and where each bone is, and anything the
+game parents under a bone (a sprite, a blade, a particle emitter) moves,
+turns and mirrors with it. Each frame
 the pose is laid out with every joint on a whole pixel, rounded off its
 parent's rounded joint, and written as the bones' transforms; facing left
 ([`Side`](pose::Side)) mirrors the skeleton exactly (its `scale.x`), so the
 pixels stay put. A rig that changes (a hot reload) keeps its bones by name,
-and what hangs from them.
+and what hangs from them; an entity no longer a puppet loses its skeleton.
 
 ## Drawing
 
@@ -88,5 +89,8 @@ What a puppet shows is the game's: sprites under its bones. With `render`
 RotSprite, once, into even steps about its joint (its offset from the bone,
 where its middle is), and shows the step nearest the bone's angle, upright,
 so pixel art stays crisp and what hangs from it stays where its art is
-drawn. Without `render`, it's rigs, clips, posing and bone entities alone:
+drawn. Its anchor, flips and size are kept; a step an odd number of pixels
+across sits half a pixel off the joint, its corner on a whole pixel. It's
+stepped again as its bone's steps or its image change, and goes back as it
+was once its bone no longer turns in steps. Without `render`, it's rigs, clips, posing and bone entities alone:
 for a server.

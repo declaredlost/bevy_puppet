@@ -120,3 +120,39 @@ impl<L: PuppetLabels> AssetLoader for ClipLoader<L> {
         &["clip.ron"]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::{Job, Knob, Mark, Tier};
+
+    #[test]
+    fn reads_rigs_and_clips_with_some_left_out() {
+        let source: RigSource<Job, Tier, Mark> = read(
+            br#"(bones: {"arm": (limit: (min: -30, max: 30), turns: 8)}, roles: {Reach: "arm"})"#,
+        )
+        .unwrap();
+        let rig = Rig::new(&source).unwrap();
+        assert_eq!(rig.role(Job::Reach), Some(0));
+        assert_eq!(rig.turn(0).map(|turn| turn.steps), Some(8));
+        let source: ClipSource<Job, Tier, Knob> = read(
+            b"(layer: Act, steps: 4, channels: [(role: Reach, angle: Keys([(0, 0), (1, 9)]))])",
+        )
+        .unwrap();
+        assert_eq!(Clip::new(&source).unwrap().steps, Some(4));
+    }
+
+    #[test]
+    fn says_what_went_wrong() {
+        let broken = read::<RigSource<Job, Tier, Mark>>(b"(bones: {").unwrap_err();
+        assert!(
+            LoadError::from(broken)
+                .to_string()
+                .starts_with("it isn't valid")
+        );
+        let source: RigSource<Job, Tier, Mark> =
+            read(br#"(bones: {"arm": (parent: "torso")})"#).unwrap();
+        let error = LoadError::from(Rig::new(&source).unwrap_err());
+        assert!(error.to_string().contains("torso"), "{error}");
+    }
+}

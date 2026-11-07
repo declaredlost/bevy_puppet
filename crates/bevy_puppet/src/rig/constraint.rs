@@ -158,7 +158,7 @@ fn bend(
     let (on_at, on_angle) = joints[on];
     let target = on_at + Vec2::from_angle(on_angle).rotate(at);
     let (origin, _) = joints[shoulder];
-    let above = rig.parent(shoulder).map_or(0.0, |parent| joints[parent].1);
+    let above = rig.turned(pose, shoulder);
     let (upper, lower) = (rig.bones[elbow].at, rig.bones[hand].at);
     let (first, second) = (upper.length(), lower.length());
     if first <= 0.0 || second <= 0.0 {

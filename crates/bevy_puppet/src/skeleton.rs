@@ -1,11 +1,12 @@
 //! Puppets in the world: a skeleton of bone entities, built from each puppet's
 //! rig, posed and placed every frame.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::f32::consts::FRAC_PI_2;
 
-use bevy::asset::{AssetEvent, AssetId, Assets, Handle};
-use bevy::ecs::message::MessageReader;
+use bevy::asset::{AssetId, Assets, Handle};
+use bevy::ecs::lifecycle::HookContext;
+use bevy::ecs::world::DeferredWorld;
 use bevy::prelude::*;
 
 use crate::clip::Clip;
@@ -26,7 +27,9 @@ const QUARTER: f32 = 1e-3;
 /// each bone ([`Bones`]), posed by its [`Animator`] and placed every frame.
 /// What it shows is whatever the game parents under its bones: they move, turn
 /// and mirror with them.
-#[derive(Component, Debug, Clone)]
+#[derive(Component, Reflect, Debug, Clone)]
+#[reflect(Component, Debug)]
+#[component(on_remove = unbuilt)]
 #[require(Animator, Pose, Side, Params, Goals, Gait, Transform)]
 #[cfg_attr(feature = "render", require(Visibility))]
 pub struct Puppet(pub Handle<Rig>);
@@ -34,7 +37,8 @@ pub struct Puppet(pub Handle<Rig>);
 /// A puppet's skeleton: the root its bones hang from, mirrored as it faces.
 ///
 /// Mirrored exactly (its `scale.x`) as the puppet faces left.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq)]
+#[reflect(Component, Debug, PartialEq)]
 #[require(Transform)]
 #[cfg_attr(feature = "render", require(Visibility))]
 pub struct Skeleton {
@@ -45,7 +49,8 @@ pub struct Skeleton {
 ///
 /// By its index in the puppet's rig: its transform is its joint, every frame,
 /// under its parent bone's.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq)]
+#[reflect(Component, Debug, PartialEq)]
 #[require(Placement, Transform)]
 #[cfg_attr(feature = "render", require(Visibility))]
 pub struct Bone {
@@ -55,11 +60,14 @@ pub struct Bone {
 
 /// A puppet's bone entities, by the bone's index in its rig, and the skeleton
 /// they hang from.
-#[derive(Component, Debug, Clone, PartialEq)]
+#[derive(Component, Reflect, Debug, Clone, PartialEq)]
+#[reflect(Component, Debug, PartialEq)]
 pub struct Bones {
     root: Entity,
     entities: Vec<Entity>,
     rig: AssetId<Rig>,
+    /// The revision of the rig they were built from.
+    revision: u64,
 }
 
 impl Skeleton {
@@ -121,23 +129,15 @@ impl Bones {
 pub(crate) fn build(
     mut commands: Commands,
     rigs: Res<Assets<Rig>>,
-    mut changed: MessageReader<AssetEvent<Rig>>,
     puppets: Query<(Entity, &Puppet, Option<&Bones>)>,
     names: Query<&Name>,
 ) {
-    let modified: HashSet<AssetId<Rig>> = changed
-        .read()
-        .filter_map(|event| match event {
-            AssetEvent::Modified { id } => Some(*id),
-            _ => None,
-        })
-        .collect();
     for (puppet, Puppet(handle), had) in &puppets {
         let id = handle.id();
         let Some(rig) = rigs.get(id) else {
             continue;
         };
-        if had.is_some_and(|bones| bones.rig == id && !modified.contains(&id)) {
+        if had.is_some_and(|bones| bones.rig == id && bones.revision == rig.revision) {
             continue;
         }
         let root = had.map_or_else(
@@ -172,28 +172,8 @@ pub(crate) fn build(
             root,
             entities,
             rig: id,
+            revision: rig.revision,
         });
-    }
-}
-
-/// Forgets how clips are bound, wherever a clip or a rig changed.
-pub(crate) fn forget(
-    mut clips: MessageReader<AssetEvent<Clip>>,
-    mut rigs: MessageReader<AssetEvent<Rig>>,
-    mut animators: Query<&mut Animator>,
-) {
-    let changed = clips.read().any(|event| {
-        matches!(
-            event,
-            AssetEvent::Modified { .. } | AssetEvent::Removed { .. }
-        )
-    }) | rigs
-        .read()
-        .any(|event| matches!(event, AssetEvent::Modified { .. }));
-    if changed {
-        for mut animator in &mut animators {
-            animator.forget();
-        }
     }
 }
 
@@ -242,6 +222,11 @@ pub(crate) fn place(
         let Some(rig) = rigs.get(handle) else {
             continue;
         };
+        // Built from another rig, or this one before it changed: until it's
+        // built again, there's nothing to place.
+        if entities.revision != rig.revision || entities.entities.len() != rig.len() {
+            continue;
+        }
         if let Ok(mut root) = roots.get_mut(entities.root) {
             root.scale.x = side.sign();
         }
@@ -259,6 +244,18 @@ pub(crate) fn place(
             *placed_on = *placement;
         }
     }
+}
+
+/// A puppet no longer one: its skeleton goes, with what hangs from it.
+fn unbuilt(mut world: DeferredWorld, context: HookContext) {
+    let Some(root) = world.get::<Bones>(context.entity).map(Bones::root) else {
+        return;
+    };
+    world.commands().entity(root).try_despawn();
+    world
+        .commands()
+        .entity(context.entity)
+        .try_remove::<Bones>();
 }
 
 /// `angle`, in radians, as a rotation: a whole number of quarter turns exactly,
@@ -384,6 +381,32 @@ mod tests {
         app.update();
         // The hand turned a quarter with the arm: up its art is to the left.
         assert!(at(&app, blade).distance(Vec2::new(9.0, 10.0)) < 1e-4);
+    }
+
+    #[test]
+    fn a_rig_losing_a_bone_a_clip_moves_poses_in_the_same_frame() {
+        let turn = r#"(layer: Move, channels: [(bone: "hand", angle: Keys([(0, 90)]))])"#;
+        let (mut app, puppet) = puppet(ARM, &[turn]);
+        let id = app.world().get::<Puppet>(puppet).unwrap().0.id();
+        let shorter = r#"(bones: {"torso": (at: (0, 10)), "arm": (parent: "torso", at: (4, 0))})"#;
+        app.world_mut()
+            .resource_mut::<Assets<Rig>>()
+            .insert(id, rig(shorter).unwrap())
+            .unwrap();
+        app.update();
+        assert_eq!(app.world().get::<Bones>(puppet).unwrap().iter().count(), 2);
+        let arm = bone(&app, puppet, "arm");
+        assert!(at(&app, arm).distance(Vec2::new(4.0, 10.0)) < 1e-4);
+    }
+
+    #[test]
+    fn a_puppet_no_longer_one_loses_its_skeleton() {
+        let (mut app, puppet) = puppet(ARM, &[]);
+        let root = app.world().get::<Bones>(puppet).unwrap().root();
+        app.world_mut().entity_mut(puppet).remove::<Puppet>();
+        app.update();
+        assert!(app.world().get_entity(root).is_err());
+        assert!(app.world().get::<Bones>(puppet).is_none());
     }
 
     #[test]

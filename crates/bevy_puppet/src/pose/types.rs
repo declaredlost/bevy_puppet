@@ -2,6 +2,8 @@
 
 use bevy::ecs::component::Component;
 use bevy::math::Vec2;
+use bevy::prelude::{ReflectComponent, ReflectDefault};
+use bevy::reflect::Reflect;
 
 use crate::rig::Rig;
 
@@ -9,14 +11,16 @@ use crate::rig::Rig;
 ///
 /// Made by its [`Animator`](super::Animator), then laid out on its bones
 /// ([`Placement`]).
-#[derive(Component, Debug, Default, Clone, PartialEq)]
+#[derive(Component, Reflect, Debug, Default, Clone, PartialEq)]
+#[reflect(Component, Debug, Default, PartialEq)]
 pub struct Pose {
     /// Each bone's joint, by index.
     pub joints: Vec<Joint>,
 }
 
 /// How a bone is moved from rest: turned about its joint, and shifted.
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq)]
+#[reflect(Debug, Default, PartialEq)]
 pub struct Joint {
     /// In radians, counterclockwise.
     pub angle: f32,
@@ -27,7 +31,8 @@ pub struct Joint {
 /// Where a bone is this frame from the puppet's origin, facing right.
 ///
 /// On each bone entity, for anything that wants a joint without its transform.
-#[derive(Component, Debug, Default, Clone, Copy, PartialEq)]
+#[derive(Component, Reflect, Debug, Default, Clone, Copy, PartialEq)]
+#[reflect(Component, Debug, Default, PartialEq)]
 pub struct Placement {
     /// Its joint, on a whole pixel.
     pub at: Vec2,
@@ -40,7 +45,8 @@ pub struct Placement {
 
 /// Which way a puppet faces: its skeleton mirrored, exactly, facing left. Set
 /// by the game.
-#[derive(Component, Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Component, Reflect, Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[reflect(Component, Debug, Default, PartialEq, Hash)]
 pub enum Side {
     /// Facing right, as rigs are drawn.
     #[default]

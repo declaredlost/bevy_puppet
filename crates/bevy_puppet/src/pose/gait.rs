@@ -1,6 +1,8 @@
 //! Clips driven by ground covered: a walk that finishes its step.
 
 use bevy::ecs::component::Component;
+use bevy::prelude::{ReflectComponent, ReflectDefault};
+use bevy::reflect::Reflect;
 
 use crate::clip::Clip;
 
@@ -8,7 +10,8 @@ use crate::clip::Clip;
 ///
 /// What a [`Driver::Gait`](crate::clip::Driver::Gait) clip plays by. The game
 /// advances it each frame by how fast the puppet moves.
-#[derive(Component, Debug, Default, Clone, PartialEq)]
+#[derive(Component, Reflect, Debug, Default, Clone, PartialEq)]
+#[reflect(Component, Debug, Default, PartialEq)]
 pub struct Gait {
     pub(crate) cycles: f32,
     pace: f32,

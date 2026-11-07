@@ -23,6 +23,9 @@ use crate::label::{InternedLayer, InternedParam, InternedRole, LayerLabel, Param
 /// plays. An asset: an [`Animator`](crate::pose::Animator) plays one by handle.
 #[derive(Asset, TypePath, Debug, Clone)]
 pub struct Clip {
+    /// Which clip this is, as made: a clip replaced has a new one, so it's
+    /// bound again.
+    pub(crate) revision: u64,
     pub(crate) layer: InternedLayer,
     pub(crate) driver: Drive,
     pub(crate) steps: Option<u32>,
@@ -71,7 +74,7 @@ pub(crate) enum Target {
 pub(crate) struct Binding(pub(crate) Vec<usize>);
 
 /// What's wrong with a clip: a channel without a target, or keys out of order.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, PartialEq, Error)]
 pub enum ClipError {
     /// A channel names neither a bone nor a role, or both.
     #[error("channel {channel} names neither a bone nor a role, or both")]
@@ -79,11 +82,23 @@ pub enum ClipError {
         /// Which channel, from 0.
         channel: usize,
     },
-    /// A channel's keyframes aren't in order.
-    #[error("channel {channel} has keyframes out of order")]
+    /// A channel's keyframes aren't in order, or two are at the same `t`.
+    #[error("channel {channel} has keyframes out of order, or two at the same t")]
     Keys {
         /// Which channel, from 0.
         channel: usize,
+    },
+    /// A time driver's length isn't a number above 0.
+    #[error("a time driver's length of {length} isn't above 0")]
+    Length {
+        /// The length.
+        length: f32,
+    },
+    /// A gait driver's stride isn't a number above 0.
+    #[error("a gait driver's stride of {stride} isn't above 0")]
+    Stride {
+        /// The stride.
+        stride: f32,
     },
 }
 
@@ -100,6 +115,15 @@ impl Clip {
         L: LayerLabel,
         P: ParamLabel,
     {
+        match source.driver {
+            Driver::Time { length, .. } if !(length.is_finite() && length > 0.0) => {
+                return Err(ClipError::Length { length });
+            }
+            Driver::Gait { stride } if !(stride.is_finite() && stride > 0.0) => {
+                return Err(ClipError::Stride { stride });
+            }
+            _ => {}
+        }
         let channels = source
             .channels
             .iter()
@@ -129,6 +153,7 @@ impl Clip {
             })
             .collect::<Result<_, _>>()?;
         Ok(Self {
+            revision: crate::revision(),
             layer: source.layer.intern(),
             driver: match &source.driver {
                 Driver::Time { length, loops } => Drive::Time {
@@ -231,5 +256,36 @@ impl Channel {
         self.extend
             .as_ref()
             .map_or(Vec2::ZERO, |shape| direction * shape.sample(t, loops))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::{Job, Knob, Tier, de};
+
+    fn new(source: &str) -> Result<Clip, ClipError> {
+        let source: ClipSource<Job, Tier, Knob> = de(source);
+        Clip::new(&source)
+    }
+
+    #[test]
+    fn refuses_drivers_and_keys_that_cant_play() {
+        assert!(matches!(
+            new("(layer: Act, driver: Time(length: 0), channels: [])"),
+            Err(ClipError::Length { .. })
+        ));
+        assert!(matches!(
+            new("(layer: Move, driver: Gait(stride: -1), channels: [])"),
+            Err(ClipError::Stride { .. })
+        ));
+        assert!(matches!(
+            new(r#"(layer: Act, channels: [(bone: "arm", angle: Keys([(0, 0), (0, 5)]))])"#),
+            Err(ClipError::Keys { channel: 0 })
+        ));
+        assert!(matches!(
+            new(r#"(layer: Act, channels: [(bone: "arm", role: Reach)])"#),
+            Err(ClipError::Target { channel: 0 })
+        ));
     }
 }
