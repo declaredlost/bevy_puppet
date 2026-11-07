@@ -18,9 +18,6 @@ repository = { workspace = true }
 proc-macro = true
 
 [dependencies]
-# Bevy's label derive, reused for ours
-bevy_macro_utils = { workspace = true, features = [] }
-
 # Parsing and quoting
 quote = { workspace = true, features = [] }
 syn = { workspace = true, features = [] }

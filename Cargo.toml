@@ -47,7 +47,6 @@ bevy_puppet_macros = { path = "./crates/bevy_puppet_macros", version = "0.1.0" }
 # Game engine (headless by default)
 bevy = { version = "0.20", default-features = false, features = ["std"] }
 bevy_curve = { version = "0.20", default-features = false, features = ["std"] }
-bevy_macro_utils = { version = "0.20", default-features = false, features = [] }
 # What Bevy's `Image` is built from, without its renderer
 wgpu-types = { version = "30", default-features = false, features = [] }
 
@@ -60,7 +59,7 @@ thiserror = { version = "2.0", features = [] }
 
 # Proc macros
 quote = { version = "1.0", features = [] }
-syn = { version = "2.0", features = [] }
+syn = { version = "3.0", features = [] }
 
 # Development: compile our code with light optimizations for fast iteration,
 # and dependencies (Bevy) fully optimized so tests run quickly.
