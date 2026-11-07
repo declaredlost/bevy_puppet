@@ -60,7 +60,7 @@ thiserror = { version = "2.0", features = [] }
 
 # Proc macros
 quote = { version = "1.0", features = [] }
-syn = { version = "2.0", features = [] }
+syn = { version = "3.0", features = [] }
 
 # Development: compile our code with light optimizations for fast iteration,
 # and dependencies (Bevy) fully optimized so tests run quickly.
