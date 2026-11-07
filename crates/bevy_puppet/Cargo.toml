@@ -1,0 +1,48 @@
+# https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[package]
+name = "bevy_puppet"
+description = "Cut-out puppets for Bevy: bone entities, layered animation, constraints, and pixel-perfect placement"
+keywords = ["bevy", "animation", "sprite", "skeleton", "pixel-art"]
+
+version = { workspace = true }
+rust-version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+publish = { workspace = true }
+
+authors = { workspace = true }
+repository = { workspace = true }
+
+[features]
+default = ["render", "ron"]
+# Sprites under bones that turn in steps, pre-rotated with RotSprite.
+# Without it, rigs, clips, posing and bone entities alone: for a server.
+render = ["bevy/bevy_sprite", "bevy/bevy_image", "dep:wgpu-types"]
+# Loaders for rigs (`.rig.ron`) and clips (`.clip.ron`), in the game's labels
+ron = ["dep:ron"]
+
+[dependencies]
+# Assets, components and transforms
+bevy = { workspace = true, features = ["bevy_asset", "bevy_log"] }
+# Curves: what channels sample
+bevy_curve = { workspace = true, features = [] }
+
+# The label derives
+bevy_puppet_macros = { workspace = true, features = [] }
+
+# What RotSprite's images are built from, without Bevy's renderer
+wgpu-types = { workspace = true, features = [], optional = true }
+
+# (De)serialization
+serde = { workspace = true, features = ["derive"] }
+ron = { workspace = true, features = [], optional = true }
+
+# Derive macros & utilities
+thiserror = { workspace = true, features = [] }
+
+[dev-dependencies]
+ron = { workspace = true, features = [] }
+
+[lints]
+workspace = true

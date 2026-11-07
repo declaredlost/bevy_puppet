@@ -1,0 +1,29 @@
+# https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[package]
+name = "bevy_puppet_macros"
+description = "bevy_puppet's label derives"
+keywords = ["bevy", "animation", "macro"]
+
+version = { workspace = true }
+rust-version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+publish = { workspace = true }
+
+authors = { workspace = true }
+repository = { workspace = true }
+
+[lib]
+proc-macro = true
+
+[dependencies]
+# Bevy's label derive, reused for ours
+bevy_macro_utils = { workspace = true, features = [] }
+
+# Parsing and quoting
+quote = { workspace = true, features = [] }
+syn = { workspace = true, features = [] }
+
+[lints]
+workspace = true
